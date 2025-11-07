@@ -34,7 +34,7 @@ import os
 class ServiceConfig:
     """Configuration for service dependencies and model paths"""
     # Eureka configuration
-    EUREKA_SERVER = "http://localhost:8761/"
+    EUREKA_SERVER = os.getenv("EUREKA_SERVER", "http://eureka-server:8761/eureka")
     SERVICE_NAME = "recommend-service"
     SERVICE_PORT = 8086
 
@@ -47,7 +47,7 @@ class ServiceConfig:
     INTERACTION_EXPORT_ENDPOINT = "/internal/v1/admin/export/interactions"
 
     # Security configuration
-    INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "your-secret-api-key-here")
+    INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "a-very-secret-key-for-internal-communication")
     API_KEY_HEADER = "X-API-KEY"
     USER_ID_HEADER = "X-User-Id"
 
@@ -121,12 +121,12 @@ class ModelState:
         async with self._lock:
             if new_als_model:
                 self.als_model = new_als_model
-                logger.info("✓ ALS model hot-swapped")
+                logger.info("ALS model hot-swapped")
 
             if new_phobert_embeddings is not None and new_product_ids:
                 self.phobert_embeddings = new_phobert_embeddings
                 self.product_ids = new_product_ids
-                logger.info("✓ PhoBERT embeddings hot-swapped")
+                logger.info("PhoBERT embeddings hot-swapped")
 
             self.models_loaded = bool(self.als_model or self.phobert_embeddings is not None)
 
@@ -177,7 +177,7 @@ class HttpClient:
                     async with session.get(url) as response:
                         if response.status == 200:
                             data = await response.json()
-                            logger.info(f"✓ Successfully fetched from {url}")
+                            logger.info(f"Successfully fetched from {url}")
                             return data
                         else:
                             error_text = await response.text()
@@ -241,7 +241,7 @@ async def startup():
             duration_in_secs=90,
         )
 
-        logger.info("✓ Successfully registered with Eureka")
+        logger.info("Successfully registered with Eureka")
 
         # Create directories if not exist
         config.MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -251,7 +251,7 @@ async def startup():
         try:
             if config.ALS_MODEL_PATH.exists():
                 model_state.als_model = AlternatingLeastSquares.load(str(config.ALS_MODEL_PATH))
-                logger.info(f"✓ ALS loaded: {len(model_state.als_model.user_map)} users, "
+                logger.info(f"ALS loaded: {len(model_state.als_model.user_map)} users, "
                            f"{len(model_state.als_model.item_map)} items, "
                            f"{model_state.als_model.n_factors} factors")
             else:
@@ -266,7 +266,7 @@ async def startup():
                     data = pickle.load(f)
                 model_state.phobert_embeddings = data['embeddings']
                 model_state.product_ids = data['product_ids']
-                logger.info(f"✓ PhoBERT loaded: {len(model_state.product_ids)} products, "
+                logger.info(f"PhoBERT loaded: {len(model_state.product_ids)} products, "
                            f"dim={model_state.phobert_embeddings.shape[1]}")
             else:
                 logger.warning("⚠ PhoBERT embeddings not found - Content-based disabled")
@@ -279,7 +279,7 @@ async def startup():
 
         status = "READY" if model_state.models_loaded else "DEGRADED"
         logger.info("=" * 60)
-        logger.info(f"✓ Service {status}: Models loaded = {model_state.models_loaded}")
+        logger.info(f"Service {status}: Models loaded = {model_state.models_loaded}")
         logger.info("=" * 60)
 
     except Exception as e:
@@ -292,7 +292,7 @@ async def shutdown():
     try:
         logger.info("Shutting down, deregistering from Eureka...")
         await eureka_client.stop_async()
-        logger.info("✓ Deregistered from Eureka")
+        logger.info("Deregistered from Eureka")
     except Exception as e:
         logger.error(f"Shutdown error: {e}")
 
@@ -477,7 +477,8 @@ def get_popular_fallback(top_k: int = 10) -> List[str]:
 # ============================================
 @app.get("/api/v1/internal/recommend/homepage", response_model=RecommendationResponse)
 async def recommend_homepage(
-    user_id: Optional[str] = Header(None, alias="X-USER-ID", description="User ID for hybrid strategy"),
+    user_id: int = Query(None, description="User id"),
+    # user_id: Optional[str] = Header(None, alias="X-USER-ID", description="User ID for hybrid strategy"),
     top_k: int = Query(10, ge=1, le=50, description="Number of recommendations")
 ) -> Dict[str, Any]:
     """
@@ -514,6 +515,7 @@ async def recommend_homepage(
 
     # Fallback to popular items
     popular_items = get_popular_fallback(top_k)
+    logger.info(popular_items)
     return {
         "product_ids": popular_items,
         "strategy": "popular",
@@ -524,7 +526,8 @@ async def recommend_homepage(
          response_model=RecommendationResponse)
 async def recommend_product_detail(
     product_id: str,
-    user_id: Optional[str] = Header(None, alias="X-USER-ID", description="User ID for hybrid strategy"),
+    user_id: int = Query(None, description="User id"),
+    # user_id: Optional[str] = Header(None, alias="X-USER-ID", description="User ID for hybrid strategy"),
     top_k: int = Query(10, ge=1, le=50, description="Number of recommendations")
 ) -> Dict[str, Any]:
     """
@@ -559,6 +562,8 @@ async def recommend_product_detail(
         raise
 
     # Guest users: content-based only
+    logger.info("content-based only")
+    logger.info(content_recs)
     if not user_id:
         return {
             "product_ids": content_recs,
@@ -584,6 +589,8 @@ async def recommend_product_detail(
         logger.warning(f"Hybrid strategy failed, falling back to content-based: {e}")
 
     # Fallback to content-based if collaborative unavailable
+    logger.info("collaborative unavailable")
+    logger.info(content_recs)
     return {
         "product_ids": content_recs,
         "strategy": "content-based",
@@ -612,14 +619,14 @@ async def fetch_training_data() -> tuple[List[ProductData], List[InteractionData
     products_raw = await http_client.fetch_with_retry(product_url)
 
     products = [ProductData(**p) for p in products_raw]
-    logger.info(f"✓ Fetched {len(products)} products")
+    logger.info(f"Fetched {len(products)} products")
 
     # Fetch interactions from Admin/Order Service
     interaction_url = f"{config.ADMIN_SERVICE_URL}{config.INTERACTION_EXPORT_ENDPOINT}"
     interactions_raw = await http_client.fetch_with_retry(interaction_url)
 
     interactions = [InteractionData(**i) for i in interactions_raw]
-    logger.info(f"✓ Fetched {len(interactions)} interactions")
+    logger.info(f"Fetched {len(interactions)} interactions")
 
     return products, interactions
 
@@ -651,7 +658,7 @@ def train_als_model(interactions: List[InteractionData]) -> AlternatingLeastSqua
 
     als.fit(interaction_tuples)
 
-    logger.info(f"✓ ALS trained: {len(als.user_map)} users, {len(als.item_map)} items")
+    logger.info(f"ALS trained: {len(als.user_map)} users, {len(als.item_map)} items")
     return als
 
 def generate_phobert_embeddings(products: List[ProductData]) -> tuple[np.ndarray, List[str]]:
@@ -689,7 +696,7 @@ def generate_phobert_embeddings(products: List[ProductData]) -> tuple[np.ndarray
 
     product_ids = [p.product_id for p in products]
 
-    logger.info(f"✓ Generated embeddings: {embeddings.shape}")
+    logger.info(f"Generated embeddings: {embeddings.shape}")
     logger.warning("⚠ Using random embeddings - implement actual PhoBERT inference!")
 
     return embeddings, product_ids
@@ -741,7 +748,7 @@ async def run_training_pipeline(job_id: str, request: TrainingRequest):
                 'product_ids': new_product_ids
             }, f)
 
-        logger.info("✓ Models saved to disk")
+        logger.info("Models saved to disk")
 
         # Step 5: Hot-swap models (no downtime)
         await model_state.update_models(
@@ -770,7 +777,7 @@ async def run_training_pipeline(job_id: str, request: TrainingRequest):
         model_state.current_training_job = None
 
         logger.info("=" * 60)
-        logger.info(f"✓ Training Job {job_id} COMPLETED in {duration:.2f}s")
+        logger.info(f"Training Job {job_id} COMPLETED in {duration:.2f}s")
         logger.info("=" * 60)
 
     except Exception as e:
@@ -790,7 +797,7 @@ async def run_training_pipeline(job_id: str, request: TrainingRequest):
 # ============================================
 # ADMIN ENDPOINTS
 # ============================================
-@app.post("/train", status_code=202)
+@app.post("/api/v1/internal/recommend/train", status_code=202)
 async def trigger_training(request: TrainingRequest, background_tasks: BackgroundTasks):
     """
     Trigger model retraining (runs in background)
@@ -942,10 +949,10 @@ async def root():
         "endpoints": {
             "internal_api": {
                 "homepage": "/api/v1/internal/recommend/homepage",
-                "product_detail": "/api/v1/internal/recommend/product-detail/{product_id}"
+                "product_detail": "/api/v1/internal/recommend/product-detail/{productId}"
             },
             "admin_api": {
-                "trigger_training": "/train",
+                "trigger_training": "/api/v1/internal/recommend/train",
                 "metrics": "/admin/metrics"
             },
             "monitoring": {

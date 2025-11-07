@@ -9,7 +9,7 @@ python-dotenv
 matplotlib
 
 # two towers
-# tensorflow==2.13.0
+tensorflow
 # tensorflow-recommenders==0.7.3
 
 #phoBERT
